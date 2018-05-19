@@ -1,18 +1,12 @@
-"""
-Carwash example.
-"""
 import simpy
 import random
 import datetime
 import os
 
-
-RANDOM_SEED = 42
-NUM_MACHINES = 2  # Number of machines in the carwash
-WASHTIME = 5      # Minutes it takes to clean a car
-T_INTER = 7       # Create a car every ~7 minutes
-SIM_TIME = 20     # Simulation time in minutes
 LOGFILE = 'project.log'
+T_INTER = 5
+SIM_TIME = 40
+NUM_FLOORS = 30
 
 def info(message, env = None):
     now = datetime.datetime.now()
@@ -21,56 +15,64 @@ def info(message, env = None):
         time = '%.2f' % (env.now)
     file = open(LOGFILE, 'a')
     #  file.write('%s %s\n' % (NOW.strftime("%Y-%m-%d %H:%M"), message))
-    file.write('%s [%s:%s] %s\n' % (now.strftime("%d %b %Y %X"), os.getpid(), time, message))
+    file.write('%s [%s:%s] %s\n'
+               % (now.strftime("%d %b %Y %X"), os.getpid(), time, message))
     file.close()
 
-class Carwash(object):
-    def __init__(self, env, num_machines, washtime):
+class Man:
+    def __init__(self, ind):
+        self.name = 'Man %d' % ind
+        self.floor = random.randint(0, NUM_FLOORS // 2)
+        self.target = self.floor
+        while (self.target == self.floor):
+            self.target = random.randint(0, NUM_FLOORS)
+        info('%s appears on floor \'%s\' with target \'%s\''
+             % (self.name, self.floor, self.target), env)
+
+class Cabine(object):
+    def __init__(self):
+        self.state = 0
+        self.floor = 0
+
+class Elevator(object):
+    def __init__(self, env, num_machines):
         self.env = env
-        self.machine = simpy.Resource(env, num_machines)
-        self.washtime = washtime
+        self.cab = simpy.Resource(env, num_machines)
+        self.cabs = [Cabine() for i in range(num_machines)]
+        self.n_cabs = num_machines
 
-    def wash(self, car):
-        yield self.env.timeout(WASHTIME)
-        info("Carwash removed %d%% of %s's dirt." %
-              (random.randint(50, 99), car), self.env)
+    def get_free_cab(self):
+        for i in range(self.n_cabs):
+            if (self.cabs[i].state == 0):
+                return i
 
+    def moving(self, man):
+        cid = self.get_free_cab()
+        self.cabs[cid].state = 1
+        moving_time = abs(man.target - man.floor)
+        waiting = abs(man.floor - self.cabs[cid].floor) + moving_time
+        yield self.env.timeout(waiting)
+        self.cabs[cid].state = 0
+        info('%s has reached by Cab %d' % (man.name, cid), env)
 
-def car(env, name, cw):
-    info('%s arrives at the carwash at %.2f.' % (name, env.now), env)
-    with cw.machine.request() as request:
+def call(env, ind, elev):
+    man = Man(ind)
+    with elev.cab.request() as request:
         yield request
+        info('%s is moving' % (man.name), env)
+        yield env.process(elev.moving(man))
 
-        info('%s enters the carwash at %.2f.' % (name, env.now), env)
-        yield env.process(cw.wash(name))
-
-        info('%s leaves the carwash at %.2f.' % (name, env.now), env)
-
-
-def setup(env, num_machines, washtime, t_inter):
-    # Create the carwash
-    carwash = Carwash(env, num_machines, washtime)
-
-    #  Create 4 initial cars
-    for i in range(4):
-        env.process(car(env, 'Car %d' % i, carwash))
-
-    # Create more cars while the simulation is running
+def people_generator(env):
+    elev = Elevator(env, 2);
+    i = 0
+    env.process(call(env, i, elev))
     while True:
-        yield env.timeout(random.randint(t_inter - 2, t_inter + 2))
+        yield env.timeout(random.randint(T_INTER - 2, T_INTER + 2))
         i += 1
-        env.process(car(env, 'Car %d' % i, carwash))
+        env.process(call(env, i, elev))
 
-
-# Setup and start the simulation
-info('Carwash')
-info('Check out http://youtu.be/fXXmeP9TvBg while simulating ... ;-)')
-random.seed(RANDOM_SEED)  # This helps reproducing the results
-
-# Create an environment and start the setup process
+info('Start session')
 env = simpy.Environment()
-env.process(setup(env, NUM_MACHINES, WASHTIME, T_INTER))
-
-# Execute!
+env.process(people_generator(env))
 env.run(until=SIM_TIME)
 info('Session end')
